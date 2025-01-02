@@ -36,6 +36,7 @@ jobs:
 
       # Step 4: Build and push the Docker image
       - name: 📦 Build and push Docker image on push
+        if: github.event_name == 'push'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -49,6 +50,7 @@ jobs:
           provenance: true
 
       - name: 🎁 Build and push Docker image on PR
+        if: ${{ github.event_name == 'pull_request_target' }}
         uses: docker/build-push-action@v6
         with:
           context: .
