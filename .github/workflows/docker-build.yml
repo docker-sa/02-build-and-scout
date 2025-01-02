@@ -56,4 +56,5 @@ jobs:
         uses: docker/scout-action@v1
         with:
             command: quickview
-            image: ${{ steps.meta.outputs.tags }}
+            #image: ${{ steps.meta.outputs.tags }}
+            image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
