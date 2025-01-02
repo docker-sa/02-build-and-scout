@@ -1,4 +1,4 @@
-name: Build Docker Image
+name: 🐳 Build Docker Image and Run Scout 🕵️‍♀️
 
 on:
     push:
@@ -11,6 +11,7 @@ on:
 permissions:
   security-events: write  # Required for uploading SARIF results
   actions: read          # Required to get Action run status
+  pull-requests: write   # Required to comment on PRs
 
 
 jobs:
@@ -18,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the repository
+      # Checkout the repository
       - name: 🐙 Checkout code
         uses: actions/checkout@v4
 
@@ -26,22 +27,20 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
 
-      # Step 3: Log in to Docker Hub
+      # Log in to Docker Hub
       - name: 🐳 Log in to Docker Hub
-        if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Step 4: Build and push the Docker image
+      # Build and push the Docker image
       - name: 📦 Build and push Docker image on push
+        if: github.event_name == 'push'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          #push: ${{ github.event_name == 'push' }}
-          #load: ${{ github.event_name == 'pull_request' }}
           load: false
           push: true
           tags: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
@@ -49,33 +48,56 @@ jobs:
           provenance: true
 
       - name: 🎁 Build and push Docker image on PR
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           load: true
           push: false
-          #push: ${{ github.event_name == 'push' }}
-          #load: ${{ github.event_name == 'pull_request' }}
-          tags: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+          tags: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
           sbom: false
           provenance: false
 
       - name: 🔍🤔 Run Scout scan on PR
         if: github.event_name == 'pull_request'
-        run: docker scout quickview
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
 
+          
       - name: 👀🤔 Compare to deployed image
         id: docker-scout-compare
         if: ${{ github.event_name == 'pull_request_target' }}
         uses: docker/scout-action@main
         with:
           command: compare
-          image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+          image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
           only-severities: critical,high
           to-env: prod
           exit-code: true       
           summary: true
+
+      - name: 🚨 Analyze PR for CVEs
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          exit-code: true  # This will make the action fail if CVEs are found
+          sarif-file: sarif.output.json
+
+      - name: 💬 Comment PR with Scout results
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          summary: true
+          write-comment: true  # This will add findings as a PR comment
 
 
       - name: 🔍 Run Scout scan on tag
@@ -87,7 +109,7 @@ jobs:
 
       - name: 🐞 Analyze for critical and high CVEs
         id: docker-scout-cves
-        if: ${{ github.event_name != 'pull_request_target' }}
+        if: github.event_name == 'push'
         uses: docker/scout-action@v1
         with:
           command: cves
@@ -95,21 +117,10 @@ jobs:
           sarif-file: sarif.output.json
           summary: true
 
-      # Run Docker Scout analysis
-      #- name: 🪲 Analyze for critical and high CVEs
-      #  id: docker-scout-cves-2
-      #  if: ${{ github.event_name != 'pull_request_target' }}
-      #  uses: docker/scout-action@v1
-      #  with:
-      #    command: cves
-      #    image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
-      #    sarif-file: sarif.output.json
-      #    summary: true
-
-      # Step 6: Upload the report as an artifact
+      # Upload the report as an artifact
       - name: 📝 Upload Scout Report
         id: upload-sarif
-        if: ${{ github.event_name != 'pull_request_target' }}
+        if: github.event_name == 'push'
         uses: github/codeql-action/upload-sarif@v2
         with:
           sarif_file: sarif.output.json
