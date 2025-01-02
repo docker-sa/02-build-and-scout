@@ -8,6 +8,11 @@ on:
       branches:
         - main
 
+permissions:
+  security-events: write  # Required for uploading SARIF results
+  actions: read          # Required to get Action run status
+
+
 jobs:
   build:
     runs-on: ubuntu-latest

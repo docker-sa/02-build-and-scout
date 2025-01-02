@@ -19,3 +19,6 @@ git push origin main ${TAG}
 Go to https://github.com/docker-sa/02-build-and-scout/actions
 
 And then, https://hub.docker.com/repository/docker/philippecharriere494/02-hello-scout-demo/general
+
+
+Scout action: https://github.com/marketplace/actions/docker-scout#record-an-image-deployed-to-an-environment
