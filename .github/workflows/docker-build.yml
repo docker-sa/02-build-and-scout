@@ -18,14 +18,14 @@ jobs:
         uses: actions/checkout@v4
 
       # Step 2: Get Docker metadata
-      - name: 🎁 Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: philippecharriere494/02-hello-scout-demo
-          tags: |
-            type=ref,event=tag
-            type=ref,event=pr
+      #- name: 🎁 Docker metadata
+      #  id: meta
+      #  uses: docker/metadata-action@v5
+      #  with:
+      #    images: philippecharriere494/02-hello-scout-demo
+      #    tags: |
+      #      type=ref,event=tag
+      #      type=ref,event=pr
 
 
       # Step 3: Log in to Docker Hub
@@ -44,8 +44,9 @@ jobs:
           file: ./Dockerfile
           push: ${{ github.event_name == 'push' }}
           load: ${{ github.event_name == 'pull_request' }}
-          #push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          #push: 
+          images: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+          #tags: ${{ steps.meta.outputs.tags }}
 
       - name: 🔍 Run Scout scan on PR
         if: github.event_name == 'pull_request'
