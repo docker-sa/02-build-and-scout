@@ -99,7 +99,7 @@ jobs:
 
       - name: 🐞 Analyze for critical and high CVEs
         id: docker-scout-cves
-        if: ${{ github.event_name != 'pull_request_target' }}
+        if: github.event_name == 'push'
         uses: docker/scout-action@v1
         with:
           command: cves
