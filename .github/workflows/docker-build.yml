@@ -11,6 +11,7 @@ on:
 permissions:
   security-events: write  # Required for uploading SARIF results
   actions: read          # Required to get Action run status
+  pull-requests: write   # Required to comment on PRs
 
 
 jobs:
