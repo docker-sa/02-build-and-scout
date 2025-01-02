@@ -65,7 +65,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: docker scout quickview
 
-      - name: Compare to deployed image
+      - name: 👀🤔 Compare to deployed image
         id: docker-scout-compare
         if: ${{ github.event_name == 'pull_request_target' }}
         uses: docker/scout-action@main
@@ -74,7 +74,6 @@ jobs:
           image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
           only-severities: critical,high
           to-env: prod
-          #platform: "linux/amd64"
           exit-code: true       
           summary: true
 
@@ -94,20 +93,18 @@ jobs:
           command: cves
           image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
           sarif-file: sarif.output.json
-          #platform: "linux/amd64"
           summary: true
 
       # Run Docker Scout analysis
-      - name: 🪲 Analyze for critical and high CVEs
-        id: docker-scout-cves-2
-        if: ${{ github.event_name != 'pull_request_target' }}
-        uses: docker/scout-action@v1
-        with:
-          command: cves
-          image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
-          sarif-file: sarif.output.json
-          #platform: "linux/amd64"
-          summary: true
+      #- name: 🪲 Analyze for critical and high CVEs
+      #  id: docker-scout-cves-2
+      #  if: ${{ github.event_name != 'pull_request_target' }}
+      #  uses: docker/scout-action@v1
+      #  with:
+      #    command: cves
+      #    image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+      #    sarif-file: sarif.output.json
+      #    summary: true
 
       # Step 6: Upload the report as an artifact
       - name: 📝 Upload Scout Report
@@ -116,7 +113,3 @@ jobs:
         uses: github/codeql-action/upload-sarif@v2
         with:
           sarif_file: sarif.output.json
-        #uses: actions/upload-artifact@v4
-        #with:
-        #  name: docker-scout-report
-        #  path: scout-report.txt
