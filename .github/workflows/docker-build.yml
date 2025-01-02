@@ -121,7 +121,7 @@ jobs:
       # Step 6: Upload the report as an artifact
       - name: 📝 Upload Scout Report
         id: upload-sarif
-        if: ${{ github.event_name != 'pull_request_target' }}
+        if: github.event_name == 'push'
         uses: github/codeql-action/upload-sarif@v2
         with:
           sarif_file: sarif.output.json
