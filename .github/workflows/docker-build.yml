@@ -65,7 +65,10 @@ jobs:
 
       - name: 🔍🤔 Run Scout scan on PR
         if: github.event_name == 'pull_request'
-        run: docker scout quickview
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
 
       - name: 👀🤔 Compare to deployed image
         id: docker-scout-compare
