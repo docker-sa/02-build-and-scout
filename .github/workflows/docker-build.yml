@@ -91,3 +91,27 @@ jobs:
           sarif-file: sarif.output.json
           #platform: "linux/amd64"
           summary: true
+
+      # Run Docker Scout analysis
+      - name: 🪲 Analyze for critical and high CVEs
+        id: docker-scout-cves-2
+        if: ${{ github.event_name != 'pull_request_target' }}
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+          sarif-file: sarif.output.json
+          #platform: "linux/amd64"
+          summary: true
+
+      # Step 6: Upload the report as an artifact
+      - name: 📝 Upload Scout Report
+        id: upload-sarif
+        if: ${{ github.event_name != 'pull_request_target' }}
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: sarif.output.json
+        #uses: actions/upload-artifact@v4
+        #with:
+        #  name: docker-scout-report
+        #  path: scout-report.txt
