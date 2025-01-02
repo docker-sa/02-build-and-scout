@@ -51,7 +51,7 @@ jobs:
           provenance: true
 
       - name: 🎁 Build and push Docker image on PR
-        if: ${{ github.event_name == 'pull_request_target' }}
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -71,6 +71,7 @@ jobs:
           command: quickview
           image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
 
+          
       - name: 👀🤔 Compare to deployed image
         id: docker-scout-compare
         if: ${{ github.event_name == 'pull_request_target' }}
