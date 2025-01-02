@@ -89,6 +89,26 @@ jobs:
           exit-code: true       
           summary: true
 
+      - name: 🚨 Analyze PR for CVEs
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          exit-code: true  # This will make the action fail if CVEs are found
+          sarif-file: sarif.output.json
+
+      - name: 💬 Comment PR with Scout results
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          summary: true
+          write-comment: true  # This will add findings as a PR comment
+
 
       - name: 🔍 Run Scout scan on tag
         if: github.event_name == 'push'
