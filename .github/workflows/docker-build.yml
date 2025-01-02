@@ -45,7 +45,8 @@ jobs:
           push: ${{ github.event_name == 'push' }}
           load: ${{ github.event_name == 'pull_request' }}
           #push: 
-          images: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+          image: philippecharriere494/02-hello-scout-demo
+          tag: ${{ github.ref_name }}
           #tags: ${{ steps.meta.outputs.tags }}
 
       - name: 🔍 Run Scout scan on PR
