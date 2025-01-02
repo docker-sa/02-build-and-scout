@@ -34,8 +34,7 @@ jobs:
           file: ./Dockerfile
           push: ${{ github.event_name == 'push' }}
           load: ${{ github.event_name == 'pull_request' }}
-          images: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
-          #tags: ${{ github.ref_name }}
+          tags: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
 
       - name: 🔍 Run Scout scan on PR
         if: github.event_name == 'pull_request'
