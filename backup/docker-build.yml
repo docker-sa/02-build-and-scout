@@ -16,6 +16,12 @@ permissions:
   actions: read             # Required to get Action run status
   pull-requests: write      # Required to comment on PRs
 
+# Define environment variables at the workflow level
+env:
+  DOCKER_REGISTRY: docker.io
+  DOCKER_NAMESPACE: philippecharriere494
+  DOCKER_IMAGE_NAME: gha-scout-hello-demo
+  SARIF_FILE: sarif.output.json
 
 jobs:
   build:
@@ -29,13 +35,24 @@ jobs:
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v3
 
-
       # Log in to Docker Hub
       - name: 🐳 Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      # Set Docker image name variables
+      - name: 🏷️ Set Docker image name variables
+        id: image-name
+        run: |
+          echo "DOCKER_IMAGE=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "IMAGE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=pr-${{ github.event.number }}" >> $GITHUB_ENV
+          fi
+          echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
 
       # Build and push the Docker image
       - name: 📦 Build and push Docker image on push
@@ -46,7 +63,7 @@ jobs:
           file: ./Dockerfile
           load: false
           push: true
-          tags: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
+          tags: ${{ env.FULL_IMAGE_NAME }}
           sbom: true
           provenance: true
 
@@ -58,7 +75,7 @@ jobs:
           file: ./Dockerfile
           load: true
           push: false
-          tags: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          tags: ${{ env.FULL_IMAGE_NAME }}
           sbom: false
           provenance: false
 
@@ -67,8 +84,7 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: quickview
-          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
-
+          image: ${{ env.FULL_IMAGE_NAME }}
           
       - name: 👀🤔 Compare to deployed image
         id: docker-scout-compare
@@ -76,7 +92,7 @@ jobs:
         uses: docker/scout-action@main
         with:
           command: compare
-          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          image: ${{ env.FULL_IMAGE_NAME }}
           only-severities: critical,high
           to-env: prod
           exit-code: true       
@@ -87,28 +103,27 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          image: ${{ env.FULL_IMAGE_NAME }}
           only-severities: critical,high
           exit-code: true  # This will make the action fail if CVEs are found
-          sarif-file: sarif.output.json
+          sarif-file: ${{ env.SARIF_FILE }}
 
       - name: 💬 Comment PR with Scout results
         if: github.event_name == 'pull_request'
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          image: ${{ env.FULL_IMAGE_NAME }}
           only-severities: critical,high
           summary: true
           write-comment: true  # This will add findings as a PR comment
-
 
       - name: 🔍 Run Scout scan on tag
         if: github.event_name == 'push'
         uses: docker/scout-action@v1
         with:
           command: quickview
-          image: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
+          image: ${{ env.FULL_IMAGE_NAME }}
 
       - name: 🐞 Analyze for critical and high CVEs
         id: docker-scout-cves
@@ -116,8 +131,8 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
-          sarif-file: sarif.output.json
+          image: ${{ env.FULL_IMAGE_NAME }}
+          sarif-file: ${{ env.SARIF_FILE }}
           summary: true
 
       # Upload the report as an artifact
@@ -126,4 +141,4 @@ jobs:
         if: github.event_name == 'push'
         uses: github/codeql-action/upload-sarif@v2
         with:
-          sarif_file: sarif.output.json
+          sarif_file: ${{ env.SARIF_FILE }}
