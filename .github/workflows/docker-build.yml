@@ -42,19 +42,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
           
-      # Set Docker image name variables
-      - name: 🏷️ Set Docker image name variables
-        id: image-name
-        run: |
-          echo "DOCKER_IMAGE=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}" >> $GITHUB_ENV
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "IMAGE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
-          else
-            echo "IMAGE_TAG=pr-${{ github.event.number }}" >> $GITHUB_ENV
-          fi
-          echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
-
-      # Build and push the Docker image
+      # Build and push the Docker image for tag events
       - name: 📦 Build and push Docker image on push
         if: github.event_name == 'push'
         uses: docker/build-push-action@v6
@@ -63,10 +51,11 @@ jobs:
           file: ./Dockerfile
           load: false
           push: true
-          tags: ${{ env.FULL_IMAGE_NAME }}
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
           sbom: true
           provenance: true
 
+      # Build and push the Docker image for PR events
       - name: 🎁 Build and push Docker image on PR
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
@@ -75,16 +64,28 @@ jobs:
           file: ./Dockerfile
           load: true
           push: false
-          tags: ${{ env.FULL_IMAGE_NAME }}
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}
           sbom: false
           provenance: false
+
+      # Set image name variable based on event type
+      - name: 🏷️ Set Docker image name variable
+        id: image-name
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}" >> $GITHUB_ENV
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}"
+          else
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}" >> $GITHUB_ENV
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}"
+          fi
 
       - name: 🔍🤔 Run Scout scan on PR
         if: github.event_name == 'pull_request'
         uses: docker/scout-action@v1
         with:
           command: quickview
-          image: ${{ env.FULL_IMAGE_NAME }}
+          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
           
       - name: 👀🤔 Compare to deployed image
         id: docker-scout-compare
@@ -92,7 +93,7 @@ jobs:
         uses: docker/scout-action@main
         with:
           command: compare
-          image: ${{ env.FULL_IMAGE_NAME }}
+          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
           only-severities: critical,high
           to-env: prod
           exit-code: true       
@@ -103,9 +104,9 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ env.FULL_IMAGE_NAME }}
+          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
           only-severities: critical,high
-          exit-code: true  # This will make the action fail if CVEs are found
+          exit-code: true
           sarif-file: ${{ env.SARIF_FILE }}
 
       - name: 💬 Comment PR with Scout results
@@ -113,17 +114,17 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ env.FULL_IMAGE_NAME }}
+          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
           only-severities: critical,high
           summary: true
-          write-comment: true  # This will add findings as a PR comment
+          write-comment: true
 
       - name: 🔍 Run Scout scan on tag
         if: github.event_name == 'push'
         uses: docker/scout-action@v1
         with:
           command: quickview
-          image: ${{ env.FULL_IMAGE_NAME }}
+          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
 
       - name: 🐞 Analyze for critical and high CVEs
         id: docker-scout-cves
@@ -131,7 +132,7 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ env.FULL_IMAGE_NAME }}
+          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
           sarif-file: ${{ env.SARIF_FILE }}
           summary: true
 
@@ -139,6 +140,6 @@ jobs:
       - name: 📝 Upload Scout Report
         id: upload-sarif
         if: github.event_name == 'push'
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v2
         with:
           sarif_file: ${{ env.SARIF_FILE }}
