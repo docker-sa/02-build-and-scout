@@ -123,8 +123,13 @@ jobs:
         if: github.event_name == 'push'
         uses: docker/scout-action@v1
         with:
-          command: quickview
+          #command: quickview
+          #image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+          command: cves
           image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+          only-severities: critical,high
+          exit-code: true
+          sarif-file: ${{ env.SARIF_FILE }}
 
       - name: 🐞 Analyze for critical and high CVEs
         id: docker-scout-cves
@@ -153,4 +158,3 @@ jobs:
           repository: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}
           short-description: "Demo application for GitHub Actions & Docker integration"
           readme-filepath: ./README.md          
-          
