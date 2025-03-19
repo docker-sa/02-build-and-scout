@@ -1,4 +1,4 @@
-name: 🐳 Build Docker Image and Run Scout 🕵️‍♀️
+name: 🐳 Build Multi-Platform Docker Image and Run Scout 🕵️‍♀️
 
 on:
   push:
@@ -32,7 +32,14 @@ jobs:
       - name: 🐙 Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Docker buildx
+      # Set up QEMU for multi-architecture builds
+      - name: 🏗️ Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # Set up Docker Buildx
+      - name: 🔧 Setup Docker buildx
         uses: docker/setup-buildx-action@v3
 
       # Log in to Docker Hub
@@ -49,22 +56,37 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          load: false
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
           sbom: true
           provenance: true
 
-      # Build and push the Docker image for PR events
-      - name: 🎁 Build and push Docker image on PR
+      # Build Docker image for PR events (not pushed)
+      - name: 🎁 Build Docker image on PR
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          load: true
+          platforms: linux/amd64,linux/arm64
+          load: false  # Can't use load with multi-platform builds
           push: false
           tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}
+          sbom: false
+          provenance: false
+          
+      # Build single platform image for scanning in PR
+      - name: 🎁 Build amd64 image for PR scanning
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true  # Load into local Docker daemon for scanning
+          push: false
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan
           sbom: false
           provenance: false
 
@@ -76,8 +98,9 @@ jobs:
             echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}" >> $GITHUB_ENV
             echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}"
           else
-            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}" >> $GITHUB_ENV
-            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}"
+            # For PR scans, use the single platform image
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan" >> $GITHUB_ENV
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan"
           fi
 
       - name: 🔍🤔 Run Scout scan on PR
@@ -85,7 +108,7 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: quickview
-          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+          image: ${{ env.FULL_IMAGE_NAME }}
           
       - name: 👀🤔 Compare to deployed image
         id: docker-scout-compare
@@ -93,7 +116,7 @@ jobs:
         uses: docker/scout-action@main
         with:
           command: compare
-          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+          image: ${{ env.FULL_IMAGE_NAME }}
           only-severities: critical,high
           to-env: prod
           exit-code: true       
@@ -104,7 +127,7 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+          image: ${{ env.FULL_IMAGE_NAME }}
           only-severities: critical,high
           exit-code: true
           sarif-file: ${{ env.SARIF_FILE }}
@@ -114,7 +137,7 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+          image: ${{ env.FULL_IMAGE_NAME }}
           only-severities: critical,high
           summary: true
           write-comment: true
@@ -124,12 +147,7 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: quickview
-          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
-          #command: cves
-          #image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
-          #only-severities: critical
-          #exit-code: true
-          #sarif-file: ${{ env.SARIF_FILE }}
+          image: ${{ env.FULL_IMAGE_NAME }}
 
       - name: 🐞 Analyze for critical and high CVEs
         id: docker-scout-cves
@@ -137,7 +155,7 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+          image: ${{ env.FULL_IMAGE_NAME }}
           sarif-file: ${{ env.SARIF_FILE }}
           summary: true
 
@@ -156,5 +174,5 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
           repository: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}
-          short-description: "Demo application for GitHub Actions & Docker integration"
-          readme-filepath: ./README.md          
+          short-description: "Demo application for GitHub Actions & Docker integration with multi-arch support"
+          readme-filepath: ./README.md
