@@ -1,0 +1,1423 @@
+Directory structure:
+└── docker-sa-02-build-and-scout/
+    ├── README.md
+    ├── create-release-tag.sh
+    ├── Dockerfile
+    ├── git.sh
+    ├── go.mod
+    ├── main.go
+    ├── release.env
+    ├── remove-release-tag.sh
+    ├── backup/
+    │   ├── docker-build copy.yml
+    │   └── docker-build.yml
+    ├── docs/
+    │   ├── EXPLANATIONS.md
+    │   ├── SUMMARY.md
+    │   └── .gitkeep
+    └── .github/
+        └── workflows/
+            └── docker-build.yml
+
+================================================
+File: README.md
+================================================
+# Docker Build + Scout with GitHub Action
+
+The GitHub Actions workflow is designed to build Docker images, scan them for vulnerabilities using Docker Scout, and update the Docker Hub repository description. Below is an explanation of each Docker-related step:
+
+---
+
+### **Setup Docker buildx**
+```yaml
+- name: Setup Docker buildx
+  uses: docker/setup-buildx-action@v3
+```
+- **Purpose**: Sets up Docker Buildx, a CLI plugin that extends Docker's build capabilities. Buildx enables advanced features like multi-platform builds, caching, and exporting build results.
+- **Why**: Required for building and pushing Docker images with advanced features.
+
+---
+
+### **Log in to Docker Hub**
+```yaml
+- name: 🐳 Log in to Docker Hub
+  uses: docker/login-action@v3
+  with:
+    username: ${{ secrets.DOCKER_USERNAME }}
+    password: ${{ secrets.DOCKER_PASSWORD }}
+```
+- **Purpose**: Logs into Docker Hub using credentials stored in GitHub Secrets.
+- **Why**: Necessary to push Docker images to Docker Hub or pull private images.
+
+---
+
+### **Build and push Docker image on push**
+```yaml
+- name: 📦 Build and push Docker image on push
+  if: github.event_name == 'push'
+  uses: docker/build-push-action@v6
+  with:
+    context: .
+    file: ./Dockerfile
+    load: false
+    push: true
+    tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
+    sbom: true
+    provenance: true
+```
+- **Purpose**: Builds and pushes a Docker image to Docker Hub when a tag is pushed.
+- **Key Features**:
+  - `context`: Specifies the build context (current directory).
+  - `file`: Specifies the Dockerfile to use.
+  - `load: false`: Does not load the image into the local Docker daemon.
+  - `push: true`: Pushes the image to Docker Hub.
+  - `tags`: Tags the image with the Git reference name (e.g., the tag name).
+  - `sbom: true`: Generates a Software Bill of Materials (SBOM) for the image.
+  - `provenance: true`: Adds provenance attestations for the image.
+- **Why**: Automates the process of building and publishing Docker images for tagged releases.
+
+---
+
+### **Build and push Docker image on PR**
+```yaml
+- name: 🎁 Build and push Docker image on PR
+  if: github.event_name == 'pull_request'
+  uses: docker/build-push-action@v6
+  with:
+    context: .
+    file: ./Dockerfile
+    load: true
+    push: false
+    tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}
+    sbom: false
+    provenance: false
+```
+- **Purpose**: Builds a Docker image for pull requests but does not push it to Docker Hub.
+- **Key Features**:
+  - `load: true`: Loads the image into the local Docker daemon for testing.
+  - `push: false`: Does not push the image to Docker Hub.
+  - `tags`: Tags the image with the pull request number.
+  - `sbom: false` and `provenance: false`: Disables SBOM and provenance generation for PR builds.
+- **Why**: Allows testing of Docker images in pull requests without publishing them.
+
+---
+
+### **Set Docker image name variable**
+```yaml
+- name: 🏷️ Set Docker image name variable
+  id: image-name
+  run: |
+    if [ "${{ github.event_name }}" = "push" ]; then
+      echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}" >> $GITHUB_ENV
+    else
+      echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}" >> $GITHUB_ENV
+```
+- **Purpose**: Sets the `FULL_IMAGE_NAME` environment variable based on the event type (push or pull request).
+- **Why**: Ensures the correct image name is used in subsequent steps.
+
+---
+
+### **Run Scout scan on PR**
+```yaml
+- name: 🔍🤔 Run Scout scan on PR
+  if: github.event_name == 'pull_request'
+  uses: docker/scout-action@v1
+  with:
+    command: quickview
+    image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+```
+- **Purpose**: Runs a quick vulnerability scan on the Docker image for pull requests using Docker Scout.
+- **Why**: Provides an overview of vulnerabilities in the image.
+
+---
+
+### **Compare to deployed image**
+```yaml
+- name: 👀🤔 Compare to deployed image
+  id: docker-scout-compare
+  if: ${{ github.event_name == 'pull_request_target' }}
+  uses: docker/scout-action@main
+  with:
+    command: compare
+    image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+    only-severities: critical,high
+    to-env: prod
+    exit-code: true       
+    summary: true
+```
+- **Purpose**: Compares the current image to the deployed image in the `prod` environment, focusing on critical and high vulnerabilities.
+- **Why**: Ensures that the new image does not introduce additional vulnerabilities.
+
+---
+
+### **Analyze PR for CVEs**
+```yaml
+- name: 🚨 Analyze PR for CVEs
+  if: github.event_name == 'pull_request'
+  uses: docker/scout-action@v1
+  with:
+    command: cves
+    image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+    only-severities: critical,high
+    exit-code: true
+    sarif-file: ${{ env.SARIF_FILE }}
+```
+- **Purpose**: Analyzes the Docker image for critical and high Common Vulnerabilities and Exposures (CVEs) and generates a SARIF report.
+- **Why**: Identifies security issues in the image before merging the pull request.
+
+---
+
+### **Comment PR with Scout results**
+```yaml
+- name: 💬 Comment PR with Scout results
+  if: github.event_name == 'pull_request'
+  uses: docker/scout-action@v1
+  with:
+    command: cves
+    image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+    only-severities: critical,high
+    summary: true
+    write-comment: true
+```
+- **Purpose**: Comments on the pull request with a summary of the CVE analysis.
+- **Why**: Provides visibility into vulnerabilities directly in the pull request.
+
+---
+
+### **Run Scout scan on tag**
+```yaml
+- name: 🔍 Run Scout scan on tag
+  if: github.event_name == 'push'
+  uses: docker/scout-action@v1
+  with:
+    command: quickview
+    image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+```
+- **Purpose**: Runs a quick vulnerability scan on the Docker image for tagged releases.
+- **Why**: Ensures the image is secure before publishing.
+
+---
+
+### **Analyze for critical and high CVEs**
+```yaml
+- name: 🐞 Analyze for critical and high CVEs
+  id: docker-scout-cves
+  if: github.event_name == 'push'
+  uses: docker/scout-action@v1
+  with:
+    command: cves
+    image: ${{ steps.image-name.outputs.FULL_IMAGE_NAME }}
+    sarif-file: ${{ env.SARIF_FILE }}
+    summary: true
+```
+- **Purpose**: Analyzes the Docker image for critical and high CVEs and generates a SARIF report.
+- **Why**: Ensures the image is secure before publishing.
+
+---
+
+### **Upload Scout Report**
+```yaml
+- name: 📝 Upload Scout Report
+  id: upload-sarif
+  if: github.event_name == 'push'
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: ${{ env.SARIF_FILE }}
+```
+- **Purpose**: Uploads the SARIF report to GitHub for further analysis.
+- **Why**: Integrates vulnerability data into GitHub's security features.
+
+---
+
+### **Update Docker Hub Description**
+```yaml
+- name: 📝 Update Docker Hub Description
+  uses: peter-evans/dockerhub-description@v3
+  with:
+    username: ${{ secrets.DOCKER_USERNAME }}
+    password: ${{ secrets.DOCKER_PASSWORD }}
+    repository: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}
+    short-description: "Demo application for GitHub Actions & Docker integration"
+    readme-filepath: ./README.md
+```
+- **Purpose**: Updates the Docker Hub repository description and README.
+- **Why**: Keeps the Docker Hub repository information up-to-date.
+
+--- 
+
+This workflow automates Docker image building, scanning, and publishing while ensuring security and providing visibility into vulnerabilities.
+
+## Docker Build and Scout GitHub Actions Workflow Diagrams
+
+### 1. Overall Workflow Trigger Flow
+
+This diagram shows when and how the workflow is triggered based on GitHub events:
+
+```mermaid
+flowchart TD
+    subgraph "GitHub Repository"
+        A[Repository] --> B[Push Tag]
+        A --> C[Create/Update PR]
+    end
+    
+    subgraph "GitHub Actions Workflow"
+        D[Build and Push Docker Image]
+        E[Run Docker Scout Scanning]
+        F[Create Security Reports]
+        G[Update Docker Hub Description]
+    end
+    
+    B -->|Triggers| D
+    C -->|Triggers| D
+    D --> E
+    E --> F
+    D --> G
+    
+    style D fill:#c9e6ff,stroke:#0066cc
+    style E fill:#ffdddd,stroke:#cc0000
+    style F fill:#ffffdd,stroke:#cccc00
+    style G fill:#ddffdd,stroke:#00cc00
+```
+
+### 2. Branching Logic by Event Type
+
+This diagram shows how the workflow handles different event types:
+
+```mermaid
+stateDiagram-v2
+    [*] --> EventCheck
+    
+    EventCheck --> PushEvent: github.event_name == 'push'
+    EventCheck --> PREvent: github.event_name == 'pull_request'
+    
+    state PushEvent {
+        PushStart --> PushBuild: Build with provenance & SBOM
+        PushBuild --> PushScan: Push to Docker Hub
+        PushScan --> PushReport: Generate & Upload SARIF
+    }
+    
+    state PREvent {
+        PRStart --> PRBuild: Build locally
+        PRBuild --> PRScan: Don't push to Docker Hub
+        PRScan --> PRCompare: Compare with prod
+        PRCompare --> PRReport: Comment on PR
+    }
+```
+
+### 3. Docker Build Process Details
+
+This diagram shows the details of the Docker build process:
+
+```mermaid
+graph TD
+    A[Setup Docker Buildx] --> B[Login to Docker Hub]
+    
+    B --> C{Event Type?}
+    C -->|Push| D[Build for Tag]
+    C -->|PR| E[Build for PR]
+    
+    D -->|"sbom: true<br>provenance: true<br>push: true"| F[Push to Docker Hub]
+    E -->|"sbom: false<br>provenance: false<br>push: false<br>load: true"| G[Load to Local Docker]
+    
+    F --> H[Set Tag Variable]
+    G --> H
+    
+    style A fill:#c9e6ff,stroke:#0066cc
+    style B fill:#c9e6ff,stroke:#0066cc
+    style D fill:#c9e6ff,stroke:#0066cc
+    style E fill:#c9e6ff,stroke:#0066cc
+    style F fill:#ddffdd,stroke:#00cc00
+    style G fill:#ffffdd,stroke:#cccc00
+```
+
+### 4. Docker Scout Security Scanning Flow
+
+This diagram shows how Docker Scout scanning is performed:
+
+```mermaid
+graph TD
+    A[Docker Image] --> B{Event Type?}
+    
+    B -->|Push| C[Quickview]
+    B -->|PR| D[Quickview]
+    
+    C --> E[Analyze for CVEs]
+    D --> F[Analyze for CVEs]
+    D --> G[Compare with prod]
+    
+    E --> H[Generate SARIF]
+    F --> I[Generate SARIF]
+    
+    H --> J[Upload to GitHub]
+    I --> K[Comment on PR]
+    
+    style A fill:#c9e6ff,stroke:#0066cc
+    style C fill:#ffdddd,stroke:#cc0000
+    style D fill:#ffdddd,stroke:#cc0000
+    style E fill:#ffdddd,stroke:#cc0000
+    style F fill:#ffdddd,stroke:#cc0000
+    style G fill:#ffdddd,stroke:#cc0000
+    style H fill:#ffffdd,stroke:#cccc00
+    style I fill:#ffffdd,stroke:#cccc00
+```
+
+### 5. Integration with GitHub Flow
+
+This diagram shows how the workflow integrates with the GitHub Flow development process:
+
+```mermaid
+flowchart TD
+    subgraph "GitHub Flow"
+        A[Main Branch] -->|Create| B[Feature Branch]
+        B -->|Commits| B
+        B -->|Open| C[Pull Request]
+        C -->|Review & Approve| D[Merge to Main]
+        D -->|Release| E[Create Tag]
+    end
+    
+    subgraph "GitHub Actions"
+        F[PR Workflow] -->|Build & Scan| G[PR Security Check]
+        G -->|Add Comments| C
+        H[Tag Workflow] -->|Build & Push| I[Docker Hub]
+        H -->|Generate Report| J[Security Dashboard]
+    end
+    
+    C -.->|Trigger| F
+    E -.->|Trigger| H
+    
+    style F fill:#c9e6ff,stroke:#0066cc
+    style G fill:#ffdddd,stroke:#cc0000
+    style H fill:#c9e6ff,stroke:#0066cc
+    style I fill:#ddffdd,stroke:#00cc00
+    style J fill:#ffffdd,stroke:#cccc00
+```
+
+### 6. Data Flow in the Workflow
+
+This diagram shows how data flows through the workflow:
+
+```mermaid
+graph LR
+    A[Source Code] --> B[Dockerfile]
+    B --> C[Docker Build]
+    
+    C -->|PR| D[Local Image]
+    C -->|Tag| E[Remote Image]
+    
+    D --> F[Scout Scan]
+    E --> G[Scout Scan]
+    
+    F --> H[SARIF Report]
+    G --> I[SARIF Report]
+    
+    H --> J[PR Comment]
+    I --> K[GitHub Security]
+    
+    L[README.md] --> M[Docker Hub Description]
+    
+    style A fill:#f9f9f9,stroke:#666666
+    style B fill:#f9f9f9,stroke:#666666
+    style C fill:#c9e6ff,stroke:#0066cc
+    style D fill:#c9e6ff,stroke:#0066cc
+    style E fill:#c9e6ff,stroke:#0066cc
+    style F fill:#ffdddd,stroke:#cc0000
+    style G fill:#ffdddd,stroke:#cc0000
+    style H fill:#ffffdd,stroke:#cccc00
+    style I fill:#ffffdd,stroke:#cccc00
+```
+
+
+================================================
+File: create-release-tag.sh
+================================================
+#!/bin/bash
+set -o allexport; source release.env; set +o allexport
+
+echo "📦️ Creating release ${TAG}..."
+git add .
+git commit -m "📦 create release ${TAG}"
+git tag ${TAG}
+git push origin main ${TAG}
+echo "📦️ Release ${TAG} created."
+echo "🚢 You can now create a release on GitHub."
+
+
+
+================================================
+File: Dockerfile
+================================================
+# Use the official Golang image as the base image
+#FROM golang:1.19-alpine
+#FROM golang:1.22-alpine
+FROM golang:1.24-alpine3.20	
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy the Go source code to the working directory
+COPY main.go .
+
+# Build the Go application
+RUN go mod init myapp && go mod tidy
+RUN go build -o myapp
+
+# Expose port 80
+EXPOSE 80
+
+# Command to run the application
+CMD ["./myapp"]
+
+
+
+
+================================================
+File: git.sh
+================================================
+#!/bin/bash
+message=""
+case $1 in
+
+  # 🎨: art
+  art)
+    message="Improve structure / format of the code"
+    emoji="🎨"
+    ;;
+
+  # 🐛: bug
+  bug|fix)
+    message="Fix a bug"
+    emoji="🐛"
+    ;;
+
+  # ✨: sparkles
+  sparkles|feature)
+    message="Introduce new feature(s)"
+    emoji="✨"
+    ;;
+
+  # 📝: memo
+  memo|doc|documentation)
+    message="Add or update documentation"
+    emoji="📝"
+    ;;
+
+  # 🌸: cherry_blossom
+  gardening|garden|clean|cleaning)
+    message="Gardening"
+    emoji="🌸"
+    ;;
+
+  # 🚀: rocket
+  rocket|deploy)
+    message="Deploy stuff"
+    emoji="🚀"
+    ;;
+
+  # 🎉: tada
+  tada|first)
+    message="Begin a project"
+    emoji="🎉"
+    ;;
+
+  # 🚧: construction
+  construction|wip)
+    message="Work in progress"
+    emoji="🚧"
+    ;;
+
+  # 📦️: package
+  package|build)
+    message="Add or update compiled files or packages"
+    emoji="📦️"
+    ;;
+
+  # 📦️: package
+  release)
+    message="Create a release"
+    emoji="📦️"
+    ;;
+
+  # 👽️: alien
+  alien|api)
+    message="Update code due to external API changes"
+    emoji="👽️"
+    ;;
+
+  # 🐳: whale
+  docker|container)
+    message="Docker"
+    emoji="🐳"
+    ;;
+
+  # 🍊: tangerine
+  gitpod|gitpodify)
+    message="Gitpodify"
+    emoji="🍊"
+    ;;
+
+  # 🧪: test tube
+  alembic|experiments|experiment|xp)
+    message="Perform experiments"
+    emoji="🧪"
+    ;;
+
+  # 💾: floppy-disk
+  save)
+    message="Saved"
+    emoji="💾"
+    ;;
+
+  *)
+  message="Updated"
+  emoji="🛟"
+  ;;
+
+esac
+
+find . -name '.DS_Store' -type f -delete
+
+if [ -z "$2" ]
+then
+  # empty
+  git add .; git commit -m "$emoji $message."; git push
+else
+  # not empty
+  git add .; git commit -m "$emoji $message: $2"; git push
+fi
+
+
+
+================================================
+File: go.mod
+================================================
+module main.go
+
+go 1.22.5
+
+
+
+================================================
+File: main.go
+================================================
+package main
+
+import (
+    "fmt"
+    "net/http"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+    fmt.Fprintln(w, "Hola, Mundo!")
+}
+
+func main() {
+    http.HandleFunc("/", handler)
+    fmt.Println("Server listening on port 80...")
+    if err := http.ListenAndServe(":80", nil); err != nil {
+        fmt.Println("Error starting server:", err)
+    }
+}
+
+
+
+================================================
+File: release.env
+================================================
+TAG="0.1.3"
+
+
+
+================================================
+File: remove-release-tag.sh
+================================================
+#!/bin/bash
+set -o allexport; source release.env; set +o allexport
+echo "🔥 Remove TAG: ${TAG}"
+git tag -d ${TAG}
+echo "👋 Remove the tag and the release on GitHub"
+git push origin :refs/tags/${TAG}
+
+
+
+================================================
+File: backup/docker-build copy.yml
+================================================
+name: 🐳 Build Multi-Platform Docker Image and Run Scout 🕵️‍♀️
+
+on:
+  push:
+    tags:
+      - '*'
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    branches:
+      - main
+
+permissions:
+  security-events: write    # Required for uploading SARIF results
+  actions: read             # Required to get Action run status
+  pull-requests: write      # Required to comment on PRs
+
+# Define environment variables at the workflow level
+env:
+  DOCKER_REGISTRY: docker.io
+  DOCKER_NAMESPACE: philippecharriere494
+  DOCKER_IMAGE_NAME: gha-scout-hello-demo
+  SARIF_FILE: sarif.output.json
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - name: 🐙 Checkout code
+        uses: actions/checkout@v4
+
+      # Set up QEMU for multi-architecture builds
+      - name: 🏗️ Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # Set up Docker Buildx
+      - name: 🔧 Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Log in to Docker Hub
+      - name: 🐳 Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      # Build and push the Docker image for tag events
+      - name: 📦 Build and push Docker image on push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
+          sbom: true
+          provenance: true
+
+      # Build Docker image for PR events (not pushed)
+      - name: 🎁 Build Docker image on PR
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          load: false  # Can't use load with multi-platform builds
+          push: false
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}
+          sbom: false
+          provenance: false
+          
+      # Build single platform image for scanning in PR
+      - name: 🎁 Build amd64 image for PR scanning
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true  # Load into local Docker daemon for scanning
+          push: false
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan
+          sbom: false
+          provenance: false
+
+      # Set image name variable based on event type
+      - name: 🏷️ Set Docker image name variable
+        id: image-name
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}" >> $GITHUB_ENV
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}"
+          else
+            # For PR scans, use the single platform image
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan" >> $GITHUB_ENV
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan"
+          fi
+
+      - name: 🔍🤔 Run Scout scan on PR
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: ${{ env.FULL_IMAGE_NAME }}
+          
+      - name: 👀🤔 Compare to deployed image
+        id: docker-scout-compare
+        if: ${{ github.event_name == 'pull_request_target' }}
+        uses: docker/scout-action@main
+        with:
+          command: compare
+          image: ${{ env.FULL_IMAGE_NAME }}
+          only-severities: critical,high
+          to-env: prod
+          exit-code: true       
+          summary: true
+
+      - name: 🚨 Analyze PR for CVEs
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.FULL_IMAGE_NAME }}
+          only-severities: critical,high
+          exit-code: true
+          sarif-file: ${{ env.SARIF_FILE }}
+
+      - name: 💬 Comment PR with Scout results
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.FULL_IMAGE_NAME }}
+          only-severities: critical,high
+          summary: true
+          write-comment: true
+
+      - name: 🔍 Run Scout scan on tag
+        if: github.event_name == 'push'
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: ${{ env.FULL_IMAGE_NAME }}
+
+      - name: 🐞 Analyze for critical and high CVEs
+        id: docker-scout-cves
+        if: github.event_name == 'push'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.FULL_IMAGE_NAME }}
+          sarif-file: ${{ env.SARIF_FILE }}
+          summary: true
+
+      # Upload the report as an artifact
+      - name: 📝 Upload Scout Report
+        id: upload-sarif
+        if: github.event_name == 'push'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ env.SARIF_FILE }}
+
+      # Update Docker Hub Repository Description
+      - name: 📝 Update Docker Hub Description
+        uses: peter-evans/dockerhub-description@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          repository: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}
+          short-description: "Demo application for GitHub Actions & Docker integration with multi-arch support"
+          readme-filepath: ./README.md
+
+
+
+================================================
+File: backup/docker-build.yml
+================================================
+name: 🐳 Build Docker Image and Run Scout 🕵️‍♀️
+
+on:
+  push:
+    tags:
+      - '*'
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    branches:
+      - main
+
+permissions:
+  security-events: write    # Required for uploading SARIF results
+  actions: read             # Required to get Action run status
+  pull-requests: write      # Required to comment on PRs
+
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - name: 🐙 Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+
+      # Log in to Docker Hub
+      - name: 🐳 Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Build and push the Docker image
+      - name: 📦 Build and push Docker image on push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: false
+          push: true
+          tags: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
+          sbom: true
+          provenance: true
+
+      - name: 🎁 Build and push Docker image on PR
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          sbom: false
+          provenance: false
+
+      - name: 🔍🤔 Run Scout scan on PR
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+
+          
+      - name: 👀🤔 Compare to deployed image
+        id: docker-scout-compare
+        if: ${{ github.event_name == 'pull_request_target' }}
+        uses: docker/scout-action@main
+        with:
+          command: compare
+          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          to-env: prod
+          exit-code: true       
+          summary: true
+
+      - name: 🚨 Analyze PR for CVEs
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          exit-code: true  # This will make the action fail if CVEs are found
+          sarif-file: sarif.output.json
+
+      - name: 💬 Comment PR with Scout results
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          summary: true
+          write-comment: true  # This will add findings as a PR comment
+
+
+      - name: 🔍 Run Scout scan on tag
+        if: github.event_name == 'push'
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
+
+      - name: 🐞 Analyze for critical and high CVEs
+        id: docker-scout-cves
+        if: github.event_name == 'push'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
+          sarif-file: sarif.output.json
+          summary: true
+
+      # Upload the report as an artifact
+      - name: 📝 Upload Scout Report
+        id: upload-sarif
+        if: github.event_name == 'push'
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: sarif.output.json
+
+
+
+================================================
+File: docs/EXPLANATIONS.md
+================================================
+# Detailed GitHub Actions Workflow Steps
+
+## 1. Checkout Code
+```yaml
+- name: 🐙 Checkout code
+  uses: actions/checkout@v4
+```
+Clones the repository into the GitHub Actions runner. Version 4 of the action includes improved performance and security features.
+
+## 2. Setup Docker Buildx
+```yaml
+- name: Setup Docker buildx
+  uses: docker/setup-buildx-action@v3
+```
+Configures Docker Buildx, which provides:
+- Multi-platform image building
+- Build caching
+- Concurrent building capabilities
+- Enhanced build features compared to classic docker build
+
+## 3. Docker Hub Authentication
+```yaml
+- name: 🐳 Log in to Docker Hub
+  uses: docker/login-action@v3
+  with:
+    username: ${{ secrets.DOCKER_USERNAME }}
+    password: ${{ secrets.DOCKER_PASSWORD }}
+```
+Authenticates with Docker Hub using:
+- Stored GitHub repository secrets for credentials
+- Secure token handling through GitHub's secrets management
+- Required for pushing images to Docker Hub
+
+## 4. Docker Image Build (Push Event)
+```yaml
+- name: 📦 Build and push Docker image on push
+  if: github.event_name == 'push'
+  uses: docker/build-push-action@v6
+  with:
+    context: .
+    file: ./Dockerfile
+    load: false
+    push: true
+    tags: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+    sbom: true
+    provenance: true
+```
+Triggered on tag push:
+- Builds from repository root context
+- Uses specified Dockerfile
+- Pushes to Docker Hub
+- Tags with git tag name
+- Generates Software Bill of Materials (SBOM)
+- Creates provenance attestation for supply chain security
+
+## 5. Docker Image Build (PR Event)
+```yaml
+- name: 🎁 Build and push Docker image on PR
+  if: github.event_name == 'pull_request'
+  uses: docker/build-push-action@v6
+  with:
+    context: .
+    file: ./Dockerfile
+    load: true
+    push: false
+    tags: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+    sbom: false
+    provenance: false
+```
+Triggered on pull requests:
+- Builds image locally only
+- No push to registry
+- Tags with PR number
+- Skips SBOM and provenance for faster PR checks
+
+## 6. Quick Security Scan (PR)
+```yaml
+- name: 🔍🤔 Run Scout scan on PR
+  if: github.event_name == 'pull_request'
+  uses: docker/scout-action@v1
+  with:
+    command: quickview
+    image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+```
+Performs rapid security assessment:
+- Basic vulnerability check
+- Configuration review
+- Quick insights into security posture
+
+## 7. Production Comparison
+```yaml
+- name: 👀🤔 Compare to deployed image
+  id: docker-scout-compare
+  if: ${{ github.event_name == 'pull_request_target' }}
+  uses: docker/scout-action@main
+  with:
+    command: compare
+    image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+    only-severities: critical,high
+    to-env: prod
+    exit-code: true       
+    summary: true
+```
+Compares PR image with production:
+- Focuses on critical and high severity issues
+- Checks against production environment
+- Fails workflow if serious issues found
+- Generates comparison summary
+
+## 8. CVE Analysis (PR)
+```yaml
+- name: 🚨 Analyze PR for CVEs
+  if: github.event_name == 'pull_request'
+  uses: docker/scout-action@v1
+  with:
+    command: cves
+    image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+    only-severities: critical,high
+    exit-code: true
+    sarif-file: sarif.output.json
+```
+Detailed vulnerability scan:
+- Checks for known CVEs
+- Focuses on critical and high severity
+- Generates SARIF format report
+- Fails if serious vulnerabilities found
+
+## 9. PR Comment Generation
+```yaml
+- name: 💬 Comment PR with Scout results
+  if: github.event_name == 'pull_request'
+  uses: docker/scout-action@v1
+  with:
+    command: cves
+    image: philippecharriere494/02-hello-scout-demo:pr-${{ github.event.number }}
+    only-severities: critical,high
+    summary: true
+    write-comment: true
+```
+Automated PR feedback:
+- Posts scan results as PR comment
+- Includes high-severity findings
+- Provides actionable security feedback
+
+## 10. Tag Security Scan
+```yaml
+- name: 🔍 Run Scout scan on tag
+  if: github.event_name == 'push'
+  uses: docker/scout-action@v1
+  with:
+    command: quickview
+    image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+```
+Scans tagged releases:
+- Quick security assessment
+- Overview of security posture
+- Applied to release candidates
+
+## 11. Release CVE Analysis
+```yaml
+- name: 🐞 Analyze for critical and high CVEs
+  id: docker-scout-cves
+  if: github.event_name == 'push'
+  uses: docker/scout-action@v1
+  with:
+    command: cves
+    image: philippecharriere494/02-hello-scout-demo:${{ github.ref_name }}
+    sarif-file: sarif.output.json
+    summary: true
+```
+Comprehensive release scanning:
+- Full CVE analysis
+- SARIF report generation
+- Summary of findings
+- Applied to tagged releases
+
+## 12. Security Report Upload
+```yaml
+- name: 📝 Upload Scout Report
+  id: upload-sarif
+  if: github.event_name == 'push'
+  uses: github/codeql-action/upload-sarif@v2
+  with:
+    sarif_file: sarif.output.json
+```
+Final security documentation:
+- Uploads SARIF report to GitHub
+- Integrates with Security tab
+- Provides permanent security record
+- Enables security tracking over time
+
+
+================================================
+File: docs/SUMMARY.md
+================================================
+# Docker Build and Scout Security Workflow
+
+This GitHub Actions workflow automates Docker image building and security scanning using Docker Scout. It triggers on two events:
+- Push events with tags
+- Pull requests to the main branch
+
+## Required Permissions
+
+```yaml
+security-events: write  # For SARIF uploads
+actions: read          # For Action status
+pull-requests: write   # For PR comments
+```
+
+## Workflow Stages
+
+### 1. Setup
+- Checks out code using `actions/checkout@v4`
+- Configures Docker Buildx
+- Authenticates with Docker Hub using provided credentials
+
+### 2. Docker Image Build
+
+#### For Tags (Push Events)
+- Builds and pushes image to Docker Hub
+- Tags: `philippecharriere494/02-hello-scout-demo:{tag}`
+- Generates SBOM and provenance
+- Repository push enabled
+
+#### For Pull Requests
+- Builds image locally
+- Tags: `philippecharriere494/02-hello-scout-demo:pr-{PR_number}`
+- No SBOM or provenance
+- No repository push
+
+### 3. Security Scanning
+
+#### Pull Request Scans
+1. **Quick Analysis**
+   - Runs `scout quickview` on PR image
+   
+2. **Production Comparison**
+   - Compares PR image with production
+   - Focuses on critical and high severity issues
+   - Fails workflow if issues found
+
+3. **CVE Analysis**
+   - Scans for critical and high severity CVEs
+   - Generates SARIF report
+   - Posts findings as PR comment
+   - Fails workflow if CVEs found
+
+#### Tag Push Scans
+1. **Quick Analysis**
+   - Runs `scout quickview` on tagged image
+
+2. **CVE Analysis**
+   - Scans for all severity CVEs
+   - Generates SARIF report
+   - Uploads report to GitHub Security
+
+## Important Notes
+
+1. The workflow uses different build configurations for PRs vs tags:
+   - PRs: Local build only, no push
+   - Tags: Full build with push to registry
+
+2. Security gates are stricter for PRs:
+   - Only critical and high severity issues block PRs
+   - All severities are recorded for tagged releases
+
+3. Automated PR feedback includes:
+   - Security scan results as comments
+   - Comparison with production environment
+   - Detailed CVE findings
+
+
+================================================
+File: docs/.gitkeep
+================================================
+
+
+
+================================================
+File: .github/workflows/docker-build.yml
+================================================
+name: 🐳 Build Multi-Platform Docker Image and Run Scout 🕵️‍♀️
+
+on:
+  push:
+    tags:
+      - '*'
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    branches:
+      - main
+
+permissions:
+  security-events: write    # Required for uploading SARIF results
+  actions: read             # Required to get Action run status
+  pull-requests: write      # Required to comment on PRs
+
+# Define environment variables at the workflow level
+env:
+  DOCKER_REGISTRY: docker.io
+  DOCKER_NAMESPACE: philippecharriere494
+  DOCKER_IMAGE_NAME: gha-scout-hello-demo
+  SARIF_FILE: sarif.output.json
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - name: 🐙 Checkout code
+        uses: actions/checkout@v4
+
+      # Set up QEMU for multi-architecture builds
+      - name: 🏗️ Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # Set up Docker Buildx
+      - name: 🔧 Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Log in to Docker Hub
+      - name: 🐳 Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      # Build and push the Docker image for tag events
+      - name: 📦 Build and push Docker image on push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}
+          sbom: true
+          provenance: true
+
+      # Build Docker image for PR events (not pushed)
+      - name: 🎁 Build Docker image on PR
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          load: false  # Can't use load with multi-platform builds
+          push: false
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}
+          sbom: false
+          provenance: false
+          
+      # Build single platform image for scanning in PR
+      - name: 🎁 Build amd64 image for PR scanning
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true  # Load into local Docker daemon for scanning
+          push: false
+          tags: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan
+          sbom: false
+          provenance: false
+
+      # Set image name variable based on event type
+      - name: 🏷️ Set Docker image name variable
+        id: image-name
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}" >> $GITHUB_ENV
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.ref_name }}"
+          else
+            # For PR scans, use the single platform image
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan" >> $GITHUB_ENV
+            echo "FULL_IMAGE_NAME=${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}:pr-${{ github.event.number }}-scan"
+          fi
+
+      - name: 🔍🤔 Run Scout scan on PR
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: ${{ env.FULL_IMAGE_NAME }}
+          
+      - name: 👀🤔 Compare to deployed image
+        id: docker-scout-compare
+        if: ${{ github.event_name == 'pull_request_target' }}
+        uses: docker/scout-action@main
+        with:
+          command: compare
+          image: ${{ env.FULL_IMAGE_NAME }}
+          only-severities: critical,high
+          to-env: prod
+          exit-code: true       
+          summary: true
+
+      - name: 🚨 Analyze PR for CVEs
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.FULL_IMAGE_NAME }}
+          only-severities: critical,high
+          exit-code: true
+          sarif-file: ${{ env.SARIF_FILE }}
+
+      - name: 💬 Comment PR with Scout results
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.FULL_IMAGE_NAME }}
+          only-severities: critical,high
+          summary: true
+          write-comment: true
+
+      - name: 🔍 Run Scout scan on tag
+        if: github.event_name == 'push'
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: ${{ env.FULL_IMAGE_NAME }}
+
+      - name: 🐞 Analyze for critical and high CVEs
+        id: docker-scout-cves
+        if: github.event_name == 'push'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.FULL_IMAGE_NAME }}
+          sarif-file: ${{ env.SARIF_FILE }}
+          summary: true
+
+      # Upload the report as an artifact
+      - name: 📝 Upload Scout Report
+        id: upload-sarif
+        if: github.event_name == 'push'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ env.SARIF_FILE }}
+
+      # Update Docker Hub Repository Description
+      - name: 📝 Update Docker Hub Description
+        uses: peter-evans/dockerhub-description@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          repository: ${{ env.DOCKER_NAMESPACE }}/${{ env.DOCKER_IMAGE_NAME }}
+          short-description: "Demo application for GitHub Actions & Docker integration with multi-arch support"
+          readme-filepath: ./README.md
+
