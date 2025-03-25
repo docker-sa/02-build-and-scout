@@ -110,18 +110,6 @@ jobs:
           command: quickview
           image: ${{ env.FULL_IMAGE_NAME }}
           
-      - name: 👀🤔 Compare to deployed image
-        id: docker-scout-compare
-        if: ${{ github.event_name == 'pull_request_target' }}
-        uses: docker/scout-action@main
-        with:
-          command: compare
-          image: ${{ env.FULL_IMAGE_NAME }}
-          only-severities: critical,high
-          to-env: prod
-          exit-code: true       
-          summary: true
-
       - name: 🚨 Analyze PR for CVEs
         if: github.event_name == 'pull_request'
         uses: docker/scout-action@v1

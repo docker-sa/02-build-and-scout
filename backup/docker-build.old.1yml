@@ -1,0 +1,129 @@
+name: 🐳 Build Docker Image and Run Scout 🕵️‍♀️
+
+on:
+  push:
+    tags:
+      - '*'
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    branches:
+      - main
+
+permissions:
+  security-events: write    # Required for uploading SARIF results
+  actions: read             # Required to get Action run status
+  pull-requests: write      # Required to comment on PRs
+
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - name: 🐙 Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+
+      # Log in to Docker Hub
+      - name: 🐳 Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Build and push the Docker image
+      - name: 📦 Build and push Docker image on push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: false
+          push: true
+          tags: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
+          sbom: true
+          provenance: true
+
+      - name: 🎁 Build and push Docker image on PR
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          sbom: false
+          provenance: false
+
+      - name: 🔍🤔 Run Scout scan on PR
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+
+          
+      - name: 👀🤔 Compare to deployed image
+        id: docker-scout-compare
+        if: ${{ github.event_name == 'pull_request_target' }}
+        uses: docker/scout-action@main
+        with:
+          command: compare
+          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          to-env: prod
+          exit-code: true       
+          summary: true
+
+      - name: 🚨 Analyze PR for CVEs
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          exit-code: true  # This will make the action fail if CVEs are found
+          sarif-file: sarif.output.json
+
+      - name: 💬 Comment PR with Scout results
+        if: github.event_name == 'pull_request'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/gha-scout-hello-demo:pr-${{ github.event.number }}
+          only-severities: critical,high
+          summary: true
+          write-comment: true  # This will add findings as a PR comment
+
+
+      - name: 🔍 Run Scout scan on tag
+        if: github.event_name == 'push'
+        uses: docker/scout-action@v1
+        with:
+          command: quickview
+          image: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
+
+      - name: 🐞 Analyze for critical and high CVEs
+        id: docker-scout-cves
+        if: github.event_name == 'push'
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: philippecharriere494/gha-scout-hello-demo:${{ github.ref_name }}
+          sarif-file: sarif.output.json
+          summary: true
+
+      # Upload the report as an artifact
+      - name: 📝 Upload Scout Report
+        id: upload-sarif
+        if: github.event_name == 'push'
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: sarif.output.json

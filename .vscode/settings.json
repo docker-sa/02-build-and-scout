@@ -8,6 +8,8 @@
     "editor.detectIndentation": true,
     "files.autoSave": "afterDelay",
     "files.autoSaveDelay": 1000,
+    "window.zoomLevel": 1,
+
     "[markdown]": {
         "editor.unicodeHighlight.ambiguousCharacters": false,
         "editor.unicodeHighlight.invisibleCharacters": false,
